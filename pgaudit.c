@@ -485,7 +485,7 @@ append_valid_csv(StringInfoData *buffer, const char *appendStr)
         appendStringInfoString(buffer, appendStr);
 }
 
-#define is_real_superuser() (superuser_arg(GetSessionUserId()))
+#define is_real_superuser() (superuser() || superuser_arg(GetSessionUserId()))
 
 /*
  * Takes an AuditEvent, classifies it, then logs it if appropriate.
