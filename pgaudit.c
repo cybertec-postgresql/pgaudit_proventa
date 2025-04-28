@@ -545,7 +545,15 @@ append_valid_csv(StringInfoData *buffer, const char *appendStr)
         appendStringInfoString(buffer, appendStr);
 }
 
-#define is_real_superuser() (superuser() || superuser_arg(GetSessionUserId()))
+/*
+ * is the current user a superuser or was the session authenticated by a
+ * superuser?
+ */
+#define is_real_superuser() \
+	((MyBackendType == B_BACKEND || \
+	  MyBackendType == B_BG_WORKER) && \
+	 (superuser() || \
+	  superuser_arg(GetAuthenticatedUserId())))
 
 /*
  * Takes an AuditEvent, classifies it, then logs it if appropriate.
