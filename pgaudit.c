@@ -1697,10 +1697,9 @@ pgaudit_object_access_hook(ObjectAccessType access,
                             int subId,
                             void *arg)
 {
-    bool am_superuser = is_real_superuser();
-
-    if ((auditLogBitmap & LOG_FUNCTION || am_superuser) && access == OAT_FUNCTION_EXECUTE &&
-        (auditEventStack || am_superuser) && !IsAbortedTransactionBlockState())
+    if ((auditLogBitmap & LOG_FUNCTION || is_real_superuser()) &&
+        access == OAT_FUNCTION_EXECUTE &&
+        auditEventStack && !IsAbortedTransactionBlockState())
         log_function_execute(objectId);
 
     if (next_object_access_hook)
