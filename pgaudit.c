@@ -795,7 +795,7 @@ log_audit_event(AuditEventStackItem *stackItem)
                                "<previously logged>,<previously logged>");
 
     /* Log rows affected */
-    if (auditLogRows || am_superuser)
+    if (auditLogRows)
         appendStringInfo(&auditStr, "," INT64_FORMAT,
                          stackItem->auditEvent.rows);
 
@@ -804,7 +804,7 @@ log_audit_event(AuditEventStackItem *stackItem)
      * translatability, but we currently haven't got translation support in
      * pgaudit anyway.
      */
-    ereport((auditLogClient && !am_superuser) ? auditLogLevel : LOG_SERVER_ONLY,
+    ereport(auditLogClient ? auditLogLevel : LOG_SERVER_ONLY,
             (errmsg("AUDIT: %s," INT64_FORMAT "," INT64_FORMAT ",%s,%s",
                     stackItem->auditEvent.granted ?
                     AUDIT_TYPE_OBJECT : AUDIT_TYPE_SESSION,
@@ -1402,13 +1402,12 @@ static bool
 pgaudit_ExecutorCheckPerms_hook(List *rangeTabls, bool ereport_on_violation)
 {
     Oid auditOid;
-    bool am_superuser = is_real_superuser();
 
     /* Get the audit oid if the role exists */
     auditOid = get_role_oid(auditRole, true);
 
     /* Log DML if the audit role is valid or session logging is enabled */
-    if ((auditOid != InvalidOid || auditLogBitmap != 0 || am_superuser) &&
+    if ((auditOid != InvalidOid || auditLogBitmap != 0 || is_real_superuser()) &&
         !IsAbortedTransactionBlockState() && !IsParallelWorker())
     {
         /* If auditLogRows is on, wait for rows processed to be set */
