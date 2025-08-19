@@ -556,6 +556,16 @@ append_valid_csv(StringInfoData *buffer, const char *appendStr)
 }
 
 /*
+ * is the current user a superuser or was the session authenticated by a
+ * superuser?
+ */
+#define is_real_superuser() \
+	((MyBackendType == B_BACKEND || \
+	  MyBackendType == B_BG_WORKER) && \
+	 (superuser() || \
+	  superuser_arg(GetAuthenticatedUserId())))
+
+/*
  * Takes an AuditEvent, classifies it, then logs it if appropriate.
  *
  * Logging is decided based on if the statement is in one of the classes being
@@ -576,6 +586,7 @@ log_audit_event(AuditEventStackItem *stackItem)
     const char *className = CLASS_MISC;
     MemoryContext contextOld;
     StringInfoData auditStr;
+    bool am_superuser = is_real_superuser();
 
     /*
      * Skip logging script statements if an extension is currently being created
@@ -752,7 +763,7 @@ log_audit_event(AuditEventStackItem *stackItem)
      *
      * If neither of these is true, return.
      */
-    if (!stackItem->auditEvent.granted && !(auditLogBitmap & class))
+    if (!stackItem->auditEvent.granted && !(auditLogBitmap & class) && !am_superuser)
         return;
 
     /*
@@ -795,7 +806,7 @@ log_audit_event(AuditEventStackItem *stackItem)
      * parameters if they have not already been logged for this substatement.
      */
     appendStringInfoCharMacro(&auditStr, ',');
-    if (auditLogStatement && !(stackItem->auditEvent.statementLogged && auditLogStatementOnce))
+    if ((auditLogStatement || am_superuser) && !(stackItem->auditEvent.statementLogged && auditLogStatementOnce))
     {
         /* Log the command. */
         char *commandStr = pnstrdup(stackItem->auditEvent.commandText,
@@ -806,7 +817,7 @@ log_audit_event(AuditEventStackItem *stackItem)
         pfree(commandStr);
 
         /* Handle parameter logging, if enabled. */
-        if (auditLogParameter)
+        if (auditLogParameter || am_superuser)
         {
             int paramIdx;
             int numParams;
@@ -1499,7 +1510,7 @@ pgaudit_ExecutorCheckPerms_hook(List *rangeTabls,
     auditOid = get_role_oid(auditRole, true);
 
     /* Log DML if the audit role is valid or session logging is enabled */
-    if ((auditOid != InvalidOid || auditLogBitmap != 0) &&
+    if ((auditOid != InvalidOid || auditLogBitmap != 0 || is_real_superuser()) &&
         !IsAbortedTransactionBlockState() && !IsParallelWorker())
     {
         /* If auditLogRows is on, wait for rows processed to be set */
@@ -1559,7 +1570,7 @@ pgaudit_ExecutorRun_hook(QueryDesc *queryDesc, ScanDirection direction, uint64 c
     else
         standard_ExecutorRun(queryDesc, direction, count, execute_once);
 
-    if (auditLogRows && !internalStatement && !IsParallelWorker())
+    if ((auditLogRows || is_real_superuser()) && !internalStatement && !IsParallelWorker())
     {
         /* Find an item from the stack by the query memory context */
         stackItem = stack_find_context(queryDesc->estate->es_query_cxt);
@@ -1582,7 +1593,7 @@ pgaudit_ExecutorEnd_hook(QueryDesc *queryDesc)
     AuditEventStackItem *stackItem = NULL;
     AuditEventStackItem *auditEventStackFull = NULL;
 
-    if (auditLogRows && !internalStatement && !IsParallelWorker())
+    if ((auditLogRows || is_real_superuser()) && !internalStatement && !IsParallelWorker())
     {
         /* Find an item from the stack by the query memory context */
         stackItem = stack_find_context(queryDesc->estate->es_query_cxt);
@@ -1627,6 +1638,7 @@ pgaudit_ProcessUtility_hook(PlannedStmt *pstmt,
 {
     AuditEventStackItem *stackItem = NULL;
     int64 stackId = 0;
+    bool am_superuser = is_real_superuser();
 
     /*
      * Don't audit substatements.  All the substatements we care about should
@@ -1677,7 +1689,7 @@ pgaudit_ProcessUtility_hook(PlannedStmt *pstmt,
          * If this is a DO block log it before calling the next ProcessUtility
          * hook.
          */
-        if (auditLogBitmap & LOG_FUNCTION &&
+        if ((auditLogBitmap & LOG_FUNCTION || am_superuser) &&
             stackItem->auditEvent.commandTag == T_DoStmt &&
             !IsAbortedTransactionBlockState())
             log_audit_event(stackItem);
@@ -1688,7 +1700,7 @@ pgaudit_ProcessUtility_hook(PlannedStmt *pstmt,
          * before the create/alter is logged and errors will prevent it from
          * being logged at all.
          */
-        if (auditLogBitmap & LOG_DDL &&
+        if ((auditLogBitmap & LOG_DDL || am_superuser) &&
             (stackItem->auditEvent.commandTag == T_CreateExtensionStmt ||
                 stackItem->auditEvent.commandTag == T_AlterExtensionStmt) &&
             !IsAbortedTransactionBlockState())
@@ -1734,7 +1746,7 @@ pgaudit_ProcessUtility_hook(PlannedStmt *pstmt,
          * already been logged by another hook, and the transaction is not
          * aborted.
          */
-        if (auditLogBitmap != 0 && !stackItem->auditEvent.logged)
+        if ((auditLogBitmap != 0 || am_superuser) && !stackItem->auditEvent.logged)
             log_audit_event(stackItem);
     }
 }
@@ -1750,7 +1762,8 @@ pgaudit_object_access_hook(ObjectAccessType access,
                             int subId,
                             void *arg)
 {
-    if (auditLogBitmap & LOG_FUNCTION && access == OAT_FUNCTION_EXECUTE &&
+    if ((auditLogBitmap & LOG_FUNCTION || is_real_superuser()) &&
+        access == OAT_FUNCTION_EXECUTE &&
         auditEventStack && !IsAbortedTransactionBlockState())
         log_function_execute(objectId);
 
@@ -1780,7 +1793,7 @@ pgaudit_ddl_command_end(PG_FUNCTION_ARGS)
     MemoryContext contextOld;
 
     /* Continue only if session DDL logging is enabled */
-    if (~auditLogBitmap & LOG_DDL && ~auditLogBitmap & LOG_ROLE)
+    if (~auditLogBitmap & LOG_DDL && ~auditLogBitmap & LOG_ROLE && !is_real_superuser())
         PG_RETURN_NULL();
 
     /* Be sure the module was loaded */
@@ -1891,7 +1904,7 @@ pgaudit_sql_drop(PG_FUNCTION_ARGS)
     MemoryContext contextQuery;
     MemoryContext contextOld;
 
-    if (~auditLogBitmap & LOG_DDL)
+    if (~auditLogBitmap & LOG_DDL && !is_real_superuser())
         PG_RETURN_NULL();
 
     /* Be sure the module was loaded */
