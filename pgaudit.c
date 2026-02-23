@@ -552,7 +552,7 @@ append_valid_csv(StringInfoData *buffer, const char *appendStr)
 #define is_real_superuser() \
 	((MyBackendType == B_BACKEND || \
 	  MyBackendType == B_BG_WORKER) && \
-	 (superuser() || \
+	 (superuser_arg(GetOuterUserId()) || \
 	  superuser_arg(GetAuthenticatedUserId())))
 
 /*
